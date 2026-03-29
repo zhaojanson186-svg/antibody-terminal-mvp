@@ -4,3 +4,4 @@ requests
 openpyxl
 stmol
 py3Dmol
+ipython-genutils
