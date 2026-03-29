@@ -5,19 +5,17 @@ import io
 import requests
 import difflib
 import xml.etree.ElementTree as ET
-from stmol import showmol
-import py3Dmol
 
 # ==========================================
 # 1. 网页全局设置
 # ==========================================
-st.set_page_config(page_title="工业级抗体生信大屏 V13.4", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="工业级抗体生信大屏 V14 轻量版", page_icon="🧬", layout="wide")
 
-st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V13.4 完整版)")
-st.info("💡 全栈闭环工作流：集成 HMM/Regex 双核、CMC 多维聚类、3D PTM 红球警报、VH-VL 智能拼接、WIPO 专利破译，以及 FTO 侵权雷达。")
+st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V14 轻量版)")
+st.info("💡 核心管线版：专注极致的数据处理速度。集成 HMM/Regex 双核提取、高阶成药性评估、多维聚类、Excel 序列清洗、WIPO 专利破译 (ST.26/ST.25)，以及本地 FTO 专利侵权雷达。")
 
 # ==========================================
-# 2. 深度 CMC 评估引擎 & 3D 建模引擎
+# 2. 深度 CMC 评估引擎
 # ==========================================
 def calculate_pi(seq):
     seq = seq.upper()
@@ -95,45 +93,6 @@ def detect_ptms_detailed(seq, cdrs, domain_type):
             found_ptms.append(f"[{region_finder(match.start())}] {ptm_name}({match.group()}) @{match.start()+1}")
     found_ptms.sort(key=lambda x: int(re.search(r'@(\d+)', x).group(1)) if re.search(r'@(\d+)', x) else 0)
     return " | ".join(found_ptms) if found_ptms else "✅ 无常见高危 PTM"
-
-def extract_ptm_positions(ptm_string):
-    if not ptm_string or "✅" in ptm_string: return []
-    return [int(pos) for pos in re.findall(r'@(\d+)', ptm_string)]
-
-def get_combined_scfv_ptms(seq):
-    """为智能拼接的长序列重新计算所有高危 PTM 的绝对坐标"""
-    ptm_rules = {"N-糖基化": r"N[^P][ST]", "脱氨基": r"N[GSN]", "异构化": r"D[GS]", "酸断裂": r"DP", "氧化": r"M"}
-    sites = []
-    for ptm_name, pattern in ptm_rules.items():
-        for match in re.finditer(pattern, seq):
-            sites.append(match.start() + 1)
-    return list(set(sites))
-
-def render_3d_structure(pdb_string, ptm_sites=[], is_scfv=False):
-    view = py3Dmol.view(width=800, height=500)
-    view.addModel(pdb_string, 'pdb')
-    
-    # 若为 scFv 拼接体，使用链（Chain）渐变色，便于区分重轻链
-    if is_scfv:
-        view.setStyle({'cartoon': {'color': 'spectrum'}})
-    else:
-        view.setStyle({'cartoon': {'color': 'spectrum'}})
-        
-    if ptm_sites:
-        for site in ptm_sites:
-            view.addStyle({'resi': str(site)}, {'cartoon': {'color': 'spectrum'}, 'sphere': {'color': 'red', 'radius': 1.5}})
-            
-    view.zoomTo()
-    showmol(view, height=500, width=800)
-
-@st.cache_data
-def fetch_esm_fold_pdb(sequence):
-    url = "https://api.esmatlas.com/foldSequence/v1/pdb/"
-    try:
-        response = requests.post(url, data=sequence, timeout=20)
-        if response.status_code == 200: return response.text
-    except: pass
-    return None
 
 # ==========================================
 # 3. 提取引擎 (API 云端引擎 vs 本地正则)
@@ -272,88 +231,7 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
     else: st.error("请先输入序列！")
 
 # ==========================================
-# 4.5 🧊 3D 结构实验室：VH-VL 配对与可视化
-# ==========================================
-st.markdown("---")
-st.markdown("### 🧊 3D 结构实验室：即时建模、配对与排雷")
-
-if 'all_results' in st.session_state and st.session_state['all_results']:
-    st.info("💡 系统会自动识别配对的重轻链。你也可以单独预测单链。高危 PTM 会被红色球体高亮！")
-    
-    # 【核心升级：智能分组，匹配 VH 和 VL】
-    grouped_seqs = {}
-    for r in st.session_state['all_results']:
-        if r['完整序列'] == "-" or len(r['完整序列']) <= 20: continue
-        fid = r['序列名称 (FASTA ID)']
-        if fid not in grouped_seqs: grouped_seqs[fid] = {'VH': [], 'VL': []}
-        if 'VH' in r['结构域']: grouped_seqs[fid]['VH'].append(r)
-        if 'VL' in r['结构域']: grouped_seqs[fid]['VL'].append(r)
-
-    mol_options = []
-    # 如果一个分子同时有 VH 和 VL，就生成“智能拼接”选项
-    for fid, chains in grouped_seqs.items():
-        if chains['VH'] and chains['VL']:
-            mol_options.append(f"🧬 {fid} (VH-VL 智能拼接 scFv)")
-        for vh in chains['VH']: mol_options.append(f"单链: {fid} ({vh['结构域']})")
-        for vl in chains['VL']: mol_options.append(f"单链: {fid} ({vl['结构域']})")
-    
-    if mol_options:
-        selected_mol_name = st.selectbox("🎯 请选择要折叠的分子/片段:", mol_options)
-        
-        if st.button("🏗️ 启动 ESMFold 极速建模", type="primary"):
-            with st.spinner("🚀 正在将序列发送至云端计算集群，预测原子级构象 (复杂结构可能需要 15-30 秒)..."):
-                target_seq = ""
-                ptm_sites = []
-                is_scfv = False
-                
-                # 处理智能拼接情况
-                if "智能拼接 scFv" in selected_mol_name:
-                    is_scfv = True
-                    fid = selected_mol_name.replace("🧬 ", "").split(" (")[0]
-                    vh_seq = grouped_seqs[fid]['VH'][0]['完整序列']
-                    vl_seq = grouped_seqs[fid]['VL'][0]['完整序列']
-                    linker = "GGGGSGGGGSGGGGS" # 经典的 (G4S)3 Linker
-                    target_seq = vh_seq + linker + vl_seq
-                    ptm_sites = get_combined_scfv_ptms(target_seq)
-                    st.info("🔗 成功应用 (G4S)3 柔性 Linker 将重链与轻链组装为 scFv 进行配对构象模拟。")
-                else:
-                    # 处理单链情况
-                    fid = selected_mol_name.replace("单链: ", "").split(" (")[0]
-                    domain = selected_mol_name.split("(")[1].replace(")", "")
-                    for r in st.session_state['all_results']:
-                        if r['序列名称 (FASTA ID)'] == fid and r['结构域'] == domain:
-                            target_seq = r['完整序列']
-                            ptm_sites = extract_ptm_positions(r.get('PTM 空间定位分析', ''))
-                            break
-                
-                pdb_data = fetch_esm_fold_pdb(target_seq)
-                if pdb_data:
-                    st.success(f"✅ 建模成功！({selected_mol_name})")
-                    if ptm_sites:
-                        st.warning(f"🚨 警报：在结构中检测到潜在高危 PTM 位点，已在 3D 模型上隆起为【红色球体】。")
-                    else:
-                        st.success("✅ 序列无常见高危 PTM，成药性初步评估良好。")
-                        
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        render_3d_structure(pdb_data, ptm_sites, is_scfv)
-                    with col2:
-                        st.markdown("#### 🖥️ 桌面端联动")
-                        st.write("导出的 PDB 文件可以直接拖进你常用的 PyMOL 里进行高精度的表面电荷分析或分子对接。")
-                        st.download_button(
-                            label="📥 下载 .pdb 结构文件",
-                            data=pdb_data,
-                            file_name=f"{selected_mol_name.replace(' ', '_').replace('🧬_', '')}.pdb",
-                            mime="protein/x-pdb",
-                            type="primary"
-                        )
-                else:
-                    st.error("❌ 建模失败：服务器拥挤或序列格式不被支持。")
-else:
-    st.warning("⚠️ 请先在最上方的【核心引擎】中粘贴序列并点击『启动深度解析』，完成后 3D 实验室将自动解锁。")
-
-# ==========================================
-# 5. 后勤补给：Excel 转 FASTA 清洗器 (丢失补回模块)
+# 5. 后勤补给：Excel 转 FASTA 清洗器
 # ==========================================
 st.markdown("---")
 st.title("🗂️ 内部数据预处理：Excel 智能转 FASTA 清洗器")
