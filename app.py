@@ -11,13 +11,13 @@ import py3Dmol
 # ==========================================
 # 1. 网页全局设置
 # ==========================================
-st.set_page_config(page_title="工业级抗体生信大屏 V13.1", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="工业级抗体生信大屏 V13.2", page_icon="🧬", layout="wide")
 
-st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V13.1 完整版)")
-st.info("💡 全栈闭环工作流：集成 HMM/Regex 双核提取、高阶成药性评估、多维聚类、Excel 序列清洗、WIPO 专利破译 (ST.26/ST.25)，以及本地 FTO 专利侵权排查雷达。")
+st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V13.2 完整版)")
+st.info("💡 全栈闭环工作流：集成 HMM/Regex 双核提取、高阶成药性评估、多维聚类、3D 结构预测、Excel 序列清洗、WIPO 专利破译 (ST.26/ST.25)，以及本地 FTO 专利侵权排查雷达。")
 
 # ==========================================
-# 2. 深度 CMC 评估引擎
+# 2. 深度 CMC 评估引擎 & 3D 建模引擎
 # ==========================================
 def calculate_pi(seq):
     seq = seq.upper()
@@ -44,7 +44,7 @@ def detect_unpaired_cysteine(seq):
     cys_positions = [i+1 for i, aa in enumerate(seq.upper()) if aa == 'C']
     count = len(cys_positions)
     if count % 2 != 0: return f"🚨 高危: 奇数({count})个 Cys @{cys_positions}"
-    elif count > 2 and count % 2 == 0: return f"⚠️ 警告: 额外配对({count})个 Cys @{cys_positions}"
+    elif count > 2 and count % 2 == 0: return f"⚠️ 警告: 额外配现({count})个 Cys @{cys_positions}"
     return "✅ 正常 (2个 Cys)"
 
 def guess_germline(seq):
@@ -96,11 +96,26 @@ def detect_ptms_detailed(seq, cdrs, domain_type):
     found_ptms.sort(key=lambda x: int(re.search(r'@(\d+)', x).group(1)) if re.search(r'@(\d+)', x) else 0)
     return " | ".join(found_ptms) if found_ptms else "✅ 无常见高危 PTM"
 
+def render_3d_structure(pdb_string):
+    view = py3Dmol.view(width=800, height=500)
+    view.addModel(pdb_string, 'pdb')
+    view.setStyle({'cartoon': {'color': 'spectrum'}})
+    view.zoomTo()
+    showmol(view, height=500, width=800)
+
+@st.cache_data
+def fetch_esm_fold_pdb(sequence):
+    url = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+    try:
+        response = requests.post(url, data=sequence, timeout=15)
+        if response.status_code == 200: return response.text
+    except: pass
+    return None
+
 # ==========================================
 # 3. 提取引擎 (API 云端引擎 vs 本地正则)
 # ==========================================
 def extract_cdrs_via_api(seq):
-    """云端 API 请求器 (带自动降级 Fallback)"""
     api_url = "https://api.antibody-informatics.org/v1/anarci/annotate"
     payload = {"sequence": seq, "scheme": "imgt"}
     try:
@@ -146,26 +161,7 @@ def parse_fasta(text):
         name, seq = lines[0].strip(), "".join(lines[1:]).replace(" ", "").upper()
         if name and seq: sequences[name] = seq
     return sequences
-# ==========================================
-# 3.5 3D 结构建模引擎 (ESMFold API)
-# ==========================================
-def render_3d_structure(pdb_string):
-    """在线渲染 3D 结构"""
-    view = py3Dmol.view(width=800, height=500)
-    view.addModel(pdb_string, 'pdb')
-    view.setStyle({'cartoon': {'color': 'spectrum'}})
-    view.zoomTo()
-    showmol(view, height=500, width=800)
 
-@st.cache_data
-def fetch_esm_fold_pdb(sequence):
-    """调用 ESMFold 获取原子坐标"""
-    url = "https://api.esmatlas.com/foldSequence/v1/pdb/"
-    try:
-        response = requests.post(url, data=sequence, timeout=15)
-        if response.status_code == 200: return response.text
-    except: pass
-    return None
 # ==========================================
 # 4. 主线战区：核心抗体解析与 CMC 聚类
 # ==========================================
@@ -220,13 +216,11 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
                     "CDR1": "-", "CDR2": "-", "CDR3": "-", "完整序列": fc
                 })
             progress_bar.progress((idx + 1) / total_seqs)
+        
         if all_results:
-            # 👇 新增这一行！把数据锁死在全局缓存里
-            st.session_state.all_results = all_results 
+            # 【修复点 1】：将结果存入全局缓存，保证跨界面交互不丢失
+            st.session_state['all_results'] = all_results
             
-            df = pd.DataFrame(all_results)
-            df_v = df[df['抽象结构域'].isin(['重链/纳米抗体', '轻链'])]
-            # ... (后面生成 Excel 的代码不变) ...
             df = pd.DataFrame(all_results)
             df_v = df[df['抽象结构域'].isin(['重链/纳米抗体', '轻链'])]
             cluster_v = df_v.groupby('完整序列').agg(
@@ -254,34 +248,25 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
             st.download_button("📥 导出综合成药性与聚类报告 (.xlsx)", data=buffer.getvalue(), file_name="Antibody_CMC_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         else: st.warning("未能识别出标准片段。")
     else: st.error("请先输入序列！")
-        # ... (上面是导出 Excel 的代码) ...
-        else: st.warning("未能识别出标准片段。")
-    else: st.error("请先输入序列！")
 
 # ==========================================
 # 4.5 🧊 3D 结构实验室：即时建模与可视化
 # ==========================================
 st.markdown("---")
-st.title("🧊 3D 结构实验室：即时建模与可视化")
+st.markdown("### 🧊 3D 结构实验室：即时建模与可视化")
 
-# 判断全局缓存中是否有解析结果
-if 'all_results' in st.session_state and st.session_state.all_results:
+# 【修复点 2】：独立模块，读取全局缓存
+if 'all_results' in st.session_state and st.session_state['all_results']:
     st.info("💡 选中上方解析出的任意一条重链或轻链，一键调用 ESMFold 预测三维原子结构。")
     
-    # 从缓存中读取选项
-    mol_options = [f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" for r in st.session_state.all_results if r['完整序列'] != "-" and len(r['完整序列']) > 20]
+    mol_options = [f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" for r in st.session_state['all_results'] if r['完整序列'] != "-" and len(r['完整序列']) > 20]
     
     if mol_options:
         selected_mol_name = st.selectbox("🎯 请选择要折叠的候选片段:", mol_options)
         
-        # 这个按钮现在是完全独立的！
         if st.button("🏗️ 启动 ESMFold 极速建模", type="primary"):
             with st.spinner("🚀 正在将序列发送至云端计算集群，预测原子级构象 (通常需要 5-15 秒)..."):
-                target_seq = ""
-                for r in st.session_state.all_results:
-                    if f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" == selected_mol_name:
-                        target_seq = r['完整序列']
-                        break
+                target_seq = next((r['完整序列'] for r in st.session_state['all_results'] if f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" == selected_mol_name), "")
                 
                 pdb_data = fetch_esm_fold_pdb(target_seq)
                 if pdb_data:
@@ -291,20 +276,19 @@ if 'all_results' in st.session_state and st.session_state.all_results:
                         render_3d_structure(pdb_data)
                     with col2:
                         st.markdown("#### 🖥️ 桌面端联动")
-                        st.write("将该 PDB 文件导入 PyMOL 等软件进行高精度分析。")
+                        st.write("导出的 PDB 文件可以直接拖进你常用的 PyMOL 里进行高精度的表面电荷分析或分子对接。")
                         st.download_button(
                             label="📥 下载 .pdb 结构文件",
                             data=pdb_data,
                             file_name=f"{selected_mol_name.replace(' ', '_')}.pdb",
                             mime="protein/x-pdb",
-                            type="primary",
-                            key="download_pdb_btn" # 加一个独立的 key 防冲突
+                            type="primary"
                         )
                 else:
                     st.error("❌ 建模失败：服务器拥挤或序列格式不被支持。")
 else:
-    # 如果没数据，给一个占位提示，证明模块已经加载进来了
-    st.warning("请先在最上方的【核心引擎】中粘贴序列并点击『启动深度解析』，完成后 3D 实验室会自动解锁。")
+    st.warning("⚠️ 请先在最上方的【核心引擎】中粘贴序列并点击『启动深度解析』，完成后 3D 实验室将自动解锁。")
+
 # ==========================================
 # 5. 后勤补给：Excel 转 FASTA 清洗器 (丢失补回模块)
 # ==========================================
@@ -359,7 +343,6 @@ if uploaded_patent is not None:
         file_extension = uploaded_patent.name.split('.')[-1].lower()
         
         try:
-            # 引擎 A：ST.26 最新 XML 破译引擎
             if file_extension == 'xml':
                 st.info("🔍 检测到 ST.26 XML 格式，启动深层解析...")
                 tree = ET.parse(uploaded_patent)
@@ -382,7 +365,6 @@ if uploaded_patent is not None:
                                     "Heavy_Chain": clean_seq, "Light_Chain": "" 
                                 })
 
-            # 引擎 B：ST.25 经典 TXT 破译引擎
             elif file_extension == 'txt':
                 st.info("🔍 检测到 ST.25 TXT 格式，启动多肽捕获...")
                 content = uploaded_patent.getvalue().decode("utf-8", errors="ignore")
@@ -403,7 +385,6 @@ if uploaded_patent is not None:
                                 "Heavy_Chain": clean_seq, "Light_Chain": "" 
                             })
 
-            # 渲染与导出
             if parsed_data:
                 df_patent = pd.DataFrame(parsed_data)
                 st.success(f"✅ 破译成功！共抓取到 **{len(parsed_data)}** 条合规蛋白质序列。")
