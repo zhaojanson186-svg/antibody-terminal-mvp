@@ -1,5 +1,4 @@
 streamlit
-biopython
-abnumber
 pandas
-git+https://github.com/oxpig/ANARCI.git
+requests
+openpyxl
