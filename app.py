@@ -11,10 +11,10 @@ import py3Dmol
 # ==========================================
 # 1. 网页全局设置
 # ==========================================
-st.set_page_config(page_title="工业级抗体生信大屏 V13.2", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="工业级抗体生信大屏 V13.3", page_icon="🧬", layout="wide")
 
-st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V13.2 完整版)")
-st.info("💡 全栈闭环工作流：集成 HMM/Regex 双核提取、高阶成药性评估、多维聚类、3D 结构预测、Excel 序列清洗、WIPO 专利破译 (ST.26/ST.25)，以及本地 FTO 专利侵权排查雷达。")
+st.title("🧬 工业级抗体生信、CMC 与 IP 联合防御系统 (V13.3 完整版)")
+st.info("💡 全栈闭环工作流：集成 HMM/Regex 双核提取、高阶成药性评估、多维聚类、3D PTM 空间高危排查、Excel 序列清洗、WIPO 专利破译 (ST.26/ST.25)，以及本地 FTO 专利侵权雷达。")
 
 # ==========================================
 # 2. 深度 CMC 评估引擎 & 3D 建模引擎
@@ -44,7 +44,7 @@ def detect_unpaired_cysteine(seq):
     cys_positions = [i+1 for i, aa in enumerate(seq.upper()) if aa == 'C']
     count = len(cys_positions)
     if count % 2 != 0: return f"🚨 高危: 奇数({count})个 Cys @{cys_positions}"
-    elif count > 2 and count % 2 == 0: return f"⚠️ 警告: 额外配现({count})个 Cys @{cys_positions}"
+    elif count > 2 and count % 2 == 0: return f"⚠️ 警告: 额外配对({count})个 Cys @{cys_positions}"
     return "✅ 正常 (2个 Cys)"
 
 def guess_germline(seq):
@@ -96,10 +96,27 @@ def detect_ptms_detailed(seq, cdrs, domain_type):
     found_ptms.sort(key=lambda x: int(re.search(r'@(\d+)', x).group(1)) if re.search(r'@(\d+)', x) else 0)
     return " | ".join(found_ptms) if found_ptms else "✅ 无常见高危 PTM"
 
-def render_3d_structure(pdb_string):
+def extract_ptm_positions(ptm_string):
+    """从 PTM 报告文本中提取需要高亮的氨基酸残基编号"""
+    if not ptm_string or "✅" in ptm_string:
+        return []
+    # 提取所有 @ 后面的数字
+    return [int(pos) for pos in re.findall(r'@(\d+)', ptm_string)]
+
+def render_3d_structure(pdb_string, ptm_sites=[]):
+    """在线渲染 3D 结构，并用红色球体高亮 PTM 位点"""
     view = py3Dmol.view(width=800, height=500)
     view.addModel(pdb_string, 'pdb')
+    
+    # 基础样式：彩虹色卡通骨架
     view.setStyle({'cartoon': {'color': 'spectrum'}})
+    
+    # 高危位点样式：如果存在 PTM，叠加红色球体
+    if ptm_sites:
+        for site in ptm_sites:
+            # ESMFold 返回的 PDB 残基编号是从 1 开始的，和我们的正则提取完美对应
+            view.addStyle({'resi': str(site)}, {'cartoon': {'color': 'spectrum'}, 'sphere': {'color': 'red', 'radius': 1.5}})
+            
     view.zoomTo()
     showmol(view, height=500, width=800)
 
@@ -218,7 +235,6 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
             progress_bar.progress((idx + 1) / total_seqs)
         
         if all_results:
-            # 【修复点 1】：将结果存入全局缓存，保证跨界面交互不丢失
             st.session_state['all_results'] = all_results
             
             df = pd.DataFrame(all_results)
@@ -255,9 +271,8 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
 st.markdown("---")
 st.markdown("### 🧊 3D 结构实验室：即时建模与可视化")
 
-# 【修复点 2】：独立模块，读取全局缓存
 if 'all_results' in st.session_state and st.session_state['all_results']:
-    st.info("💡 选中上方解析出的任意一条重链或轻链，一键调用 ESMFold 预测三维原子结构。")
+    st.info("💡 选中上方解析出的任意一条重链或轻链，一键调用 ESMFold 预测三维原子结构。如果序列存在高危 PTM，将以【红色球体】高亮警报。")
     
     mol_options = [f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" for r in st.session_state['all_results'] if r['完整序列'] != "-" and len(r['完整序列']) > 20]
     
@@ -266,14 +281,29 @@ if 'all_results' in st.session_state and st.session_state['all_results']:
         
         if st.button("🏗️ 启动 ESMFold 极速建模", type="primary"):
             with st.spinner("🚀 正在将序列发送至云端计算集群，预测原子级构象 (通常需要 5-15 秒)..."):
-                target_seq = next((r['完整序列'] for r in st.session_state['all_results'] if f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" == selected_mol_name), "")
+                target_seq = ""
+                ptm_string = ""
+                for r in st.session_state['all_results']:
+                    if f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" == selected_mol_name:
+                        target_seq = r['完整序列']
+                        ptm_string = r.get('PTM 空间定位分析', '')
+                        break
+                
+                # 提取 PTM 位点数字列表
+                ptm_sites = extract_ptm_positions(ptm_string)
                 
                 pdb_data = fetch_esm_fold_pdb(target_seq)
                 if pdb_data:
                     st.success(f"✅ 建模成功！({selected_mol_name})")
+                    if ptm_sites:
+                        st.warning(f"🚨 警报：在当前结构中检测到潜在高危 PTM 位点（已用红色球体标记）：{ptm_string}")
+                    else:
+                        st.success("✅ 序列无常见高危 PTM，成药性初步评估良好。")
+                        
                     col1, col2 = st.columns([2, 1])
                     with col1:
-                        render_3d_structure(pdb_data)
+                        # 传入 PTM 数据进行增强渲染
+                        render_3d_structure(pdb_data, ptm_sites)
                     with col2:
                         st.markdown("#### 🖥️ 桌面端联动")
                         st.write("导出的 PDB 文件可以直接拖进你常用的 PyMOL 里进行高精度的表面电荷分析或分子对接。")
