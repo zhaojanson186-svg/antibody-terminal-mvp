@@ -220,8 +220,13 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
                     "CDR1": "-", "CDR2": "-", "CDR3": "-", "完整序列": fc
                 })
             progress_bar.progress((idx + 1) / total_seqs)
-        
         if all_results:
+            # 👇 新增这一行！把数据锁死在全局缓存里
+            st.session_state.all_results = all_results 
+            
+            df = pd.DataFrame(all_results)
+            df_v = df[df['抽象结构域'].isin(['重链/纳米抗体', '轻链'])]
+            # ... (后面生成 Excel 的代码不变) ...
             df = pd.DataFrame(all_results)
             df_v = df[df['抽象结构域'].isin(['重链/纳米抗体', '轻链'])]
             cluster_v = df_v.groupby('完整序列').agg(
@@ -253,55 +258,53 @@ if st.button("🚀 启动深度解析与聚类计算", type="primary"):
         else: st.warning("未能识别出标准片段。")
     else: st.error("请先输入序列！")
 
-# 👇 从这里开始插入 3D 实验室前端代码 👇
 # ==========================================
 # 4.5 🧊 3D 结构实验室：即时建模与可视化
 # ==========================================
 st.markdown("---")
-st.markdown("### 🧊 3D 结构实验室：即时建模与可视化")
+st.title("🧊 3D 结构实验室：即时建模与可视化")
 
-# 只有当主战区跑完，生成了 all_results 且不为空时，才显示 3D 模块
-if 'all_results' in locals() and all_results:
+# 判断全局缓存中是否有解析结果
+if 'all_results' in st.session_state and st.session_state.all_results:
     st.info("💡 选中上方解析出的任意一条重链或轻链，一键调用 ESMFold 预测三维原子结构。")
     
-    # 提取所有成功解析的序列名字作为下拉菜单选项
-    mol_options = [f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" for r in all_results if r['完整序列'] != "-" and len(r['完整序列']) > 20]
+    # 从缓存中读取选项
+    mol_options = [f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" for r in st.session_state.all_results if r['完整序列'] != "-" and len(r['完整序列']) > 20]
     
     if mol_options:
         selected_mol_name = st.selectbox("🎯 请选择要折叠的候选片段:", mol_options)
         
+        # 这个按钮现在是完全独立的！
         if st.button("🏗️ 启动 ESMFold 极速建模", type="primary"):
             with st.spinner("🚀 正在将序列发送至云端计算集群，预测原子级构象 (通常需要 5-15 秒)..."):
-                # 匹配选中的序列
                 target_seq = ""
-                for r in all_results:
+                for r in st.session_state.all_results:
                     if f"{r['序列名称 (FASTA ID)']} ({r['结构域']})" == selected_mol_name:
                         target_seq = r['完整序列']
                         break
                 
-                # 获取结构并渲染
                 pdb_data = fetch_esm_fold_pdb(target_seq)
                 if pdb_data:
                     st.success(f"✅ 建模成功！({selected_mol_name})")
                     col1, col2 = st.columns([2, 1])
                     with col1:
-                        # 在网页左侧渲染 3D 图
                         render_3d_structure(pdb_data)
                     with col2:
                         st.markdown("#### 🖥️ 桌面端联动")
-                        st.write("将该 PDB 文件导入 PyMOL、ChimeraX 或 Discovery Studio 以进行高精度表面电荷分析或分子对接。")
+                        st.write("将该 PDB 文件导入 PyMOL 等软件进行高精度分析。")
                         st.download_button(
                             label="📥 下载 .pdb 结构文件",
                             data=pdb_data,
                             file_name=f"{selected_mol_name.replace(' ', '_')}.pdb",
                             mime="protein/x-pdb",
-                            type="primary"
+                            type="primary",
+                            key="download_pdb_btn" # 加一个独立的 key 防冲突
                         )
                 else:
                     st.error("❌ 建模失败：服务器拥挤或序列格式不被支持。")
-
-# 👆 3D 实验室前端代码结束 👆
-
+else:
+    # 如果没数据，给一个占位提示，证明模块已经加载进来了
+    st.warning("请先在最上方的【核心引擎】中粘贴序列并点击『启动深度解析』，完成后 3D 实验室会自动解锁。")
 # ==========================================
 # 5. 后勤补给：Excel 转 FASTA 清洗器 (丢失补回模块)
 # ==========================================
